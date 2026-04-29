@@ -24,12 +24,15 @@ export interface WorkflowRun {
   name: string
   display_title?: string
   status: string
+  conclusion?: string | null
   html_url: string
   head_branch: string
+  head_sha?: string
   event: string
   run_number: number
   run_started_at?: string
   created_at: string
+  updated_at?: string
   head_commit?: HeadCommit
   triggering_actor?: GitHubActor
   actor?: GitHubActor
@@ -37,6 +40,7 @@ export interface WorkflowRun {
   repository?: { name: string; html_url: string }
   _repo?: GitHubRepo
   _jobs?: WorkflowJob[]
+  _inputs?: { ENVIRONMENT?: string; SUBSCRIPTION?: string }
 }
 
 export interface WorkflowJob {

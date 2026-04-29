@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { useUser, useOrgs, useRepos, useGitHubRuns, useJobsForRuns } from '../hooks/useGitHubRuns'
+import { useUser, useOrgs, useRepos, useGitHubRuns, useJobsForRuns, useInputsForRuns } from '../hooks/useGitHubRuns'
 import type { RepoSource } from '../api/github'
 import { Header } from './Header'
 import { RepoGroup } from './RepoGroup'
@@ -21,24 +21,36 @@ function loadDisabledRepos(): Set<string> {
       const migrated = arr.map((name) => (name.includes('/') ? name : `DEAPCZ/${name}`))
       return new Set(migrated)
     }
-  } catch { /* ignore */ }
+  } catch (e) {
+    console.warn('[Dashboard] Failed to load disabled repos:', e)
+  }
   return new Set()
 }
 
 function saveDisabledRepos(set: Set<string>) {
-  localStorage.setItem(DISABLED_REPOS_KEY, JSON.stringify([...set]))
+  try {
+    localStorage.setItem(DISABLED_REPOS_KEY, JSON.stringify([...set]))
+  } catch (e) {
+    console.warn('[Dashboard] Failed to save disabled repos:', e)
+  }
 }
 
 function loadSelectedOrgs(): string[] | null {
   try {
     const stored = localStorage.getItem(SELECTED_ORGS_KEY)
-    if (stored) return JSON.parse(stored)
-  } catch { /* ignore */ }
-  return null // null = select all (first load)
+    if (stored !== null) return JSON.parse(stored)
+  } catch (e) {
+    console.warn('[Dashboard] Failed to load selected orgs:', e)
+  }
+  return null // null = never saved (first ever load) — distinct from saved empty array
 }
 
 function saveSelectedOrgs(set: Set<string>) {
-  localStorage.setItem(SELECTED_ORGS_KEY, JSON.stringify([...set]))
+  try {
+    localStorage.setItem(SELECTED_ORGS_KEY, JSON.stringify([...set]))
+  } catch (e) {
+    console.warn('[Dashboard] Failed to save selected orgs:', e)
+  }
 }
 
 interface DashboardProps {
@@ -69,24 +81,33 @@ export function Dashboard({ token, onLogout }: DashboardProps) {
     return entries
   }, [user, apiOrgs])
 
-  // When entries load for the first time and no stored selection exists, select all
+  // When entries load for the first time, reconcile stored selection with what's actually available.
   useEffect(() => {
     if (allEntries.length === 0 || orgsInitialized) return
     setOrgsInitialized(true)
     const stored = loadSelectedOrgs()
+    const available = new Set(allEntries.map((e) => e.login))
+
     if (stored === null) {
-      const allSet = new Set(allEntries.map((e) => e.login))
-      setSelectedOrgs(allSet)
-      saveSelectedOrgs(allSet)
+      // Never saved — first ever load. Default: select all.
+      setSelectedOrgs(available)
+      saveSelectedOrgs(available)
+      return
+    }
+
+    if (stored.length === 0) {
+      // User explicitly deselected everything — respect that, don't reset.
+      setSelectedOrgs(new Set())
+      return
+    }
+
+    const valid = new Set(stored.filter((o) => available.has(o)))
+    if (valid.size === 0) {
+      // Saved orgs all became unavailable (user lost access / orgs removed) — fall back to all.
+      setSelectedOrgs(available)
+      saveSelectedOrgs(available)
     } else {
-      const available = new Set(allEntries.map((e) => e.login))
-      const valid = new Set(stored.filter((o) => available.has(o)))
-      if (valid.size === 0) {
-        setSelectedOrgs(available)
-        saveSelectedOrgs(available)
-      } else {
-        setSelectedOrgs(valid)
-      }
+      setSelectedOrgs(valid)
     }
   }, [allEntries, orgsInitialized])
 
@@ -106,6 +127,7 @@ export function Dashboard({ token, onLogout }: DashboardProps) {
 
   const { data, isFetching, isError, error, dataUpdatedAt } = useGitHubRuns(token, enabledRepos)
   const { data: jobsMap } = useJobsForRuns(token, data?.runs ?? [])
+  const inputsMap = useInputsForRuns(token, data?.runs ?? [], jobsMap)
 
   const handleRefresh = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['github-runs'] })
@@ -141,14 +163,15 @@ export function Dashboard({ token, onLogout }: DashboardProps) {
 
   const multiOrg = selectedOrgs.size > 1
 
-  // Merge jobs into runs
+  // Merge jobs and parsed inputs into runs
   const runsWithJobs = useMemo(() => {
     if (!data?.runs) return []
     return data.runs.map((run) => ({
       ...run,
       _jobs: jobsMap?.get(run.id) ?? run._jobs,
+      _inputs: inputsMap.get(run.id) ?? run._inputs,
     }))
-  }, [data, jobsMap])
+  }, [data, jobsMap, inputsMap])
 
   const groups = useMemo(() => {
     if (runsWithJobs.length === 0) return []

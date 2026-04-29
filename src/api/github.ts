@@ -1,6 +1,7 @@
 import type { GitHubOrg, GitHubRepo, WorkflowRun, WorkflowJob, RunsData } from '../types'
 
 const ACTIVE_STATUSES = new Set(['in_progress', 'queued', 'waiting', 'requested', 'pending'])
+const RECENT_COMPLETION_MS = 2 * 60 * 1000
 
 // Concurrency limiter
 function createPool(concurrency: number) {
@@ -47,6 +48,29 @@ async function ghFetch<T>(url: string, token: string): Promise<T> {
     }
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
     return resp.json() as Promise<T>
+  })
+}
+
+/**
+ * Fetch a URL through the same concurrency pool as ghFetch, but return text instead of JSON.
+ * Used for endpoints that return plain text (e.g. job logs, which redirect to a signed blob URL).
+ * Returns `null` for 404 (e.g. log not yet available); throws for other non-OK responses.
+ */
+export async function ghFetchText(url: string, token: string): Promise<string | null> {
+  return apiPool(async () => {
+    const resp = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    })
+    if (resp.status === 404) return null
+    if (resp.status === 401 || resp.status === 403) {
+      throw new Error(`HTTP ${resp.status}: Insufficient token permissions`)
+    }
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    return resp.text()
   })
 }
 
@@ -108,13 +132,18 @@ export async function fetchAllRuns(repos: GitHubRepo[], token: string): Promise<
         `https://api.github.com/repos/${owner}/${repo.name}/actions/runs?per_page=30`,
         token
       )
-      const activeRuns = (data.workflow_runs || []).filter((r) =>
-        ACTIVE_STATUSES.has(r.status)
-      )
-      activeRuns.forEach((r) => {
+      const now = Date.now()
+      const visibleRuns = (data.workflow_runs || []).filter((r) => {
+        if (ACTIVE_STATUSES.has(r.status)) return true
+        if (r.status === 'completed' && r.updated_at) {
+          return now - new Date(r.updated_at).getTime() < RECENT_COMPLETION_MS
+        }
+        return false
+      })
+      visibleRuns.forEach((r) => {
         r._repo = repo
       })
-      return activeRuns
+      return visibleRuns
     } catch {
       return []
     }
@@ -123,8 +152,18 @@ export async function fetchAllRuns(repos: GitHubRepo[], token: string): Promise<
   const results = await Promise.all(runPromises)
   const allRuns = results.flat()
 
-  // Sort: in_progress first, then by created_at desc
+  // Sort: active runs first (in_progress, then queued/waiting), completed runs at bottom
+  // Within active: in_progress before others, then by created_at desc
+  // Within completed: most recently finished first
   allRuns.sort((a, b) => {
+    const aDone = a.status === 'completed'
+    const bDone = b.status === 'completed'
+    if (aDone !== bDone) return aDone ? 1 : -1
+    if (aDone && bDone) {
+      const aEnd = a.updated_at ? new Date(a.updated_at).getTime() : 0
+      const bEnd = b.updated_at ? new Date(b.updated_at).getTime() : 0
+      return bEnd - aEnd
+    }
     if (a.status === 'in_progress' && b.status !== 'in_progress') return -1
     if (a.status !== 'in_progress' && b.status === 'in_progress') return 1
     return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()

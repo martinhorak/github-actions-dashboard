@@ -4,6 +4,7 @@ import { formatDuration } from '../utils/formatDuration'
 import { eventLabel } from '../utils/eventLabel'
 import { useTimer } from '../hooks/useTimer'
 import { StatusBadge } from './StatusBadge'
+import { InputBadge } from './InputBadge'
 import { JobItem } from './JobItem'
 
 interface RunCardProps {
@@ -12,14 +13,24 @@ interface RunCardProps {
 
 export function RunCard({ run }: RunCardProps) {
   useTimer(1000)
-  const [expanded, setExpanded] = useState(true)
+  const [expanded, setExpanded] = useState(false)
 
   const startTime = run.run_started_at || run.created_at
+  const endTime = run.status === 'completed' ? run.updated_at : undefined
   const commitMsg = run.head_commit?.message
   const actor = run.triggering_actor || run.actor
   const hasJobs = run._jobs && run._jobs.length > 0
 
+  const owner = run._repo?.owner?.login
+  const repoName = run._repo?.name ?? run.repository?.name
+  const commitUrl =
+    owner && repoName && run.head_sha
+      ? `https://github.com/${owner}/${repoName}/commit/${run.head_sha}`
+      : undefined
+
   const toggle = () => hasJobs && setExpanded((prev) => !prev)
+
+  console.log('RunCard', run);
 
   return (
     <div
@@ -44,7 +55,7 @@ export function RunCard({ run }: RunCardProps) {
               <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z" />
             </svg>
           )}
-          <StatusBadge status={run.status} />
+          <StatusBadge status={run.status} conclusion={run.conclusion} />
           <a
             href={run.html_url}
             target="_blank"
@@ -56,7 +67,7 @@ export function RunCard({ run }: RunCardProps) {
           </a>
         </div>
         <div className="run-card-actions">
-          <span className="timer">{formatDuration(startTime)}</span>
+          <span className="timer">{formatDuration(startTime, endTime)}</span>
           <a
             href={run.html_url}
             target="_blank"
@@ -73,6 +84,12 @@ export function RunCard({ run }: RunCardProps) {
       </div>
 
       <div className="run-meta">
+        {run._inputs?.ENVIRONMENT && (
+          <InputBadge variant="environment" value={run._inputs.ENVIRONMENT} />
+        )}
+        {run._inputs?.SUBSCRIPTION && (
+          <InputBadge variant="subscription" value={run._inputs.SUBSCRIPTION} />
+        )}
         <span className="run-meta-item">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
             <path d="M11.93 8.5a4.002 4.002 0 0 1-7.86 0H.75a.75.75 0 0 1 0-1.5h3.32a4.002 4.002 0 0 1 7.86 0h3.32a.75.75 0 0 1 0 1.5Zm-1.43-.75a2.5 2.5 0 1 0-5 0 2.5 2.5 0 0 0 5 0Z" />
@@ -114,24 +131,40 @@ export function RunCard({ run }: RunCardProps) {
           #{run.run_number}
         </span>
 
-        {commitMsg && (
-          <span
-            className="run-meta-item"
-            style={{
-              maxWidth: '300px',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-            title={commitMsg}
-          >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M11.93 8.5a4.002 4.002 0 0 1-7.86 0H.75a.75.75 0 0 1 0-1.5h3.32a4.002 4.002 0 0 1 7.86 0h3.32a.75.75 0 0 1 0 1.5Zm-1.43-.75a2.5 2.5 0 1 0-5 0 2.5 2.5 0 0 0 5 0Z" />
-            </svg>
-            {commitMsg.split('\n')[0].substring(0, 50)}
-            {commitMsg.length > 50 ? '...' : ''}
-          </span>
-        )}
+        {commitMsg && (() => {
+          const commitContent = (
+            <>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M11.93 8.5a4.002 4.002 0 0 1-7.86 0H.75a.75.75 0 0 1 0-1.5h3.32a4.002 4.002 0 0 1 7.86 0h3.32a.75.75 0 0 1 0 1.5Zm-1.43-.75a2.5 2.5 0 1 0-5 0 2.5 2.5 0 0 0 5 0Z" />
+              </svg>
+              {commitMsg.split('\n')[0].substring(0, 50)}
+              {commitMsg.length > 50 ? '...' : ''}
+            </>
+          )
+          const itemStyle = {
+            maxWidth: '300px',
+            overflow: 'hidden' as const,
+            textOverflow: 'ellipsis' as const,
+            whiteSpace: 'nowrap' as const,
+          }
+          return commitUrl ? (
+            <a
+              className="run-meta-item run-meta-link"
+              style={itemStyle}
+              href={commitUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={commitMsg}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {commitContent}
+            </a>
+          ) : (
+            <span className="run-meta-item" style={itemStyle} title={commitMsg}>
+              {commitContent}
+            </span>
+          )
+        })()}
       </div>
 
       {expanded && hasJobs && (
