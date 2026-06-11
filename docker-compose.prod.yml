@@ -1,0 +1,26 @@
+services:
+  backend:
+    build: ./server
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NOTIFIER_CONFIG_PATH=/data/notifier-config.json
+    volumes:
+      - ghactions_data:/data
+    expose:
+      - "3002"
+    networks:
+      default:
+        aliases:
+          - ghactions-api
+
+volumes:
+  ghactions_data:
+    external: true
+    name: githubactions_data
+
+networks:
+  default:
+    name: proxy
+    external: true
